@@ -2,24 +2,25 @@
 
 > **Local-First CRDT & SQLite-to-Postgres Real-Time Sync Engine for Modern Web & Mobile Apps**
 >
-> *High-performance data synchronization infrastructure and client SDK for local-first software architectures (Linear-style UX). Binds client-side SQLite (Wasm/OPFS on web, native on mobile) to backend PostgreSQL via logical replication (CDC), resolves offline concurrent edits with Conflict-free Replicated Data Types (CRDTs), and streams deltas over WebSocket.*
+> High-performance data synchronization infrastructure and client SDK for local-first software architectures (Linear-style UX). Binds client-side SQLite (Wasm/OPFS on web, native on mobile) to backend PostgreSQL via logical replication (CDC), resolves offline concurrent edits with Conflict-free Replicated Data Types (CRDTs), and streams deltas over WebSocket.
 
 ---
 
 ## 1. Project Overview & Architecture
 
-Modern users demand instantaneous software experiences (like Linear, Superhuman, and Notion): zero loading spinners, immediate 0ms UI updates, and full offline capability. However, building local-first applications is notorious for immense distributed systems complexity:
-1. **The Distributed Conflict Problem**: When two users edit different fields of the same record simultaneously while offline, naive database sync overwrites one user's changes or causes silent data loss.
-2. **Proprietary & Costly Vendor Lock-In**: Commercial sync services (Replicache) charge steep enterprise licensing fees and require proprietary backend synchronization code.
-3. **Complex Infrastructure Footprint**: Existing open-source projects (ElectricSQL) rely on complex multi-tier Elixir/Erlang stacks that are cumbersome to deploy and maintain on standard cloud environments.
+Modern users demand instantaneous software experiences: zero loading spinners, immediate 0ms UI updates, and full offline capability. However, building local-first applications presents distributed systems challenges:
+1. **Distributed Conflict Resolution**: When two users edit different fields of the same record concurrently while offline, naive database sync overwrites one user's changes or causes silent data loss.
+2. **Vendor Lock-In and Licensing**: Commercial sync services charge steep enterprise licensing fees and require proprietary backend synchronization code.
+3. **Complex Infrastructure Footprint**: Existing open-source alternatives rely on multi-tier Elixir/Erlang stacks that are cumbersome to deploy and maintain on standard cloud environments.
 4. **Offline Queue Fragility**: Replaying offline operations in the wrong order or without monotonic timestamps corrupts foreign key relationships and application state.
 
-**SyncLoom** provides an open-source, self-hosted, single-binary sync engine and lightweight client SDK:
-- **0ms Client-Side Latency**: All UI reads and writes execute against local client SQLite (running in Wasm/OPFS in the browser, or native SQLite in React Native / Android).
+SyncLoom provides an open-source, self-hosted, single-binary sync engine and lightweight client SDK:
+- **0ms Client-Side Latency**: All UI reads and writes execute against local client SQLite (running in Wasm/OPFS in the browser, or native SQLite on mobile).
 - **Postgres Change Data Capture (CDC)**: Server sidecar listens directly to PostgreSQL Logical Replication (`pgoutput` plugin), capturing row-level inserts, updates, and deletes without database triggers.
 - **Hybrid Logical Clock (HLC) & Field-Level CRDTs**: Guarantees deterministic conflict resolution. Concurrent edits to different columns of the same row merge automatically; simultaneous edits to the same column resolve via monotonic Hybrid Logical Clocks.
-- **Reliable Offline Mutation Queue**: Automatically stores transactions on client disk when network connectivity drops, replaying mutations in strict sequence upon reconnecting.
-- **Single-Binary Go Server & Web Studio**: Zero-dependency Go backend managing WebSocket delta streaming alongside an embedded React 19 monitoring studio.
+- **Transaction-Aware Batched Sync**: Preserves Postgres atomic transactions across WebSocket deltas, preventing inconsistent intermediate states.
+- **Reliable Offline Mutation Queue**: Persists transactions on client disk when network connectivity drops, replaying mutations in strict FIFO sequence with idempotency upon reconnecting.
+- **Embedded Web Studio & Simulator**: Zero-dependency Go backend managing WebSocket delta streaming alongside an embedded React 19 monitoring studio with a live dual-peer conflict sandbox.
 
 ```
 +-----------------------------------------------------------------------------------+
@@ -47,15 +48,15 @@ Modern users demand instantaneous software experiences (like Linear, Superhuman,
                         +-----------------v-----------------+
                         |    PostgreSQL CDC Replication     |
                         |  * Native pgoutput Logical Stream |
-                        |  * Zero Custom Database Triggers  |
-                        |  * Row Delta Transformation       |
+                        |  * Standalone / Demo CDC Fallback |
+                        |  * Transactional Row Delta Stream |
                         +-----------------+-----------------+
                                           |
                         +-----------------v-----------------+
                         |   Interactive Web Studio & CLI    |
                         |  * Live Peer Sync Graph (Port 9330|
                         |  * Conflict Resolution Audit Log  |
-                        |  * Replication Lag Gauges         |
+                        |  * Interactive 2-Peer Simulator   |
                         +-----------------------------------+
 ```
 
@@ -67,48 +68,64 @@ Modern users demand instantaneous software experiences (like Linear, Superhuman,
 syncloom/
 ├── cmd/
 │   └── syncloom/
-│       └── main.go               # Single-binary sync server entrypoint
+│       └── main.go               # Single-binary sync server entrypoint (CLI)
 ├── internal/
 │   ├── pgcdc/
 │   │   ├── replicator.go         # PostgreSQL logical replication listener (pglogrepl)
 │   │   ├── parser.go             # Ingests pgoutput relation, insert, update, delete
-│   │   └── wal_tracker.go        # Tracks confirmed LSN (Log Sequence Number)
+│   │   ├── wal_tracker.go        # Tracks confirmed LSN (Log Sequence Number)
+│   │   └── standalone_cdc.go     # Embedded CDC engine for demo & local development
 │   ├── crdt/
 │   │   ├── hlc.go                # Hybrid Logical Clock implementation
 │   │   ├── resolver.go           # Field-level Last-Write-Wins (LWW) resolver
-│   │   └── delta.go              # Compact binary/JSON delta representation
+│   │   ├── delta.go              # Compact delta records and metadata structures
+│   │   └── resolver_test.go      # CRDT concurrency and convergence test suite
 │   ├── hub/
 │   │   ├── client.go             # WebSocket client connection handler
 │   │   ├── room.go               # Table and row-level subscription routing
-│   │   └── broadcast.go          # Fan-out delta publisher to subscribed peers
+│   │   ├── broadcast.go          # Fan-out delta publisher to subscribed peers
+│   │   └── hub_test.go           # High-concurrency broadcast benchmarks
 │   ├── auth/
 │   │   └── jwt_validator.go      # Row-level security & user tenant isolation
 │   └── server/
-│       ├── api.go                # REST API for status & schema sync
-│       └── static.go             # Embedded Vite frontend assets
+│       ├── api.go                # REST API for status, metrics, conflicts, schema
+│       └── static.go             # Embedded Vite frontend assets (go:embed)
 ├── sdk/
-│   ├── typescript/
-│   │   ├── src/
-│   │   │   ├── client.ts         # SyncLoomClient main entrypoint
-│   │   │   ├── sqlite_wasm.ts    # OPFS SQLite Wasm storage adapter
-│   │   │   ├── queue.ts          # Persistent offline mutation queue
-│   │   │   ├── sync_socket.ts    # WebSocket client with exponential reconnect
-│   │   │   └── hooks.ts          # React hooks (useSyncQuery, useSyncMutation)
-│   │   ├── package.json
-│   │   └── tsconfig.json
+│   └── typescript/
+│       ├── src/
+│       │   ├── hlc.ts            # Client-side Hybrid Logical Clock
+│       │   ├── types.ts          # Delta, mutation, query, and config typings
+│       │   ├── sqlite_storage.ts # SQLite storage adapter (Wasm/OPFS & in-memory)
+│       │   ├── queue.ts          # Persistent offline mutation FIFO queue
+│       │   ├── sync_socket.ts    # WebSocket client with backoff and reconnection
+│       │   ├── client.ts         # SyncLoomClient main entrypoint
+│       │   ├── hooks.ts          # React 19 hooks (useSyncLoom, useSyncQuery, etc.)
+│       │   └── index.ts          # SDK public exports
+│       ├── package.json
+│       ├── tsconfig.json
+│       └── tests/
 ├── web/
 │   ├── src/
 │   │   ├── components/
-│   │   │   ├── ActivePeersList.tsx   # Connected clients & sync status
-│   │   │   ├── ConflictLogTable.tsx  # Merged concurrent edits audit trail
-│   │   │   ├── ReplicationLagGauge.tsx # Milliseconds latency from Postgres to client
-│   │   │   └── TableSyncMatrix.tsx   # Synchronized tables and row counts
+│   │   │   ├── Header.tsx             # Studio navigation & connection indicator
+│   │   │   ├── ActivePeersList.tsx    # Connected clients & sync status
+│   │   │   ├── ConflictLogTable.tsx   # Merged concurrent edits audit trail
+│   │   │   ├── ReplicationLagGauge.tsx# Sub-20ms replication latency gauge
+│   │   │   ├── TableSyncMatrix.tsx    # Synchronized tables and live change stream
+│   │   │   └── PeerSimulator.tsx      # Dual-client offline conflict simulator
 │   │   ├── hooks/
-│   │   │   └── useSyncStats.ts
+│   │   │   └── useSyncStats.ts        # Live stats stream hook
 │   │   ├── App.tsx
-│   │   └── main.tsx
+│   │   ├── main.tsx
+│   │   └── index.css
 │   ├── package.json
-│   └── vite.config.ts
+│   ├── vite.config.ts
+│   └── tailwind.config.js
+├── docs/
+│   ├── ARCHITECTURE.md           # Distributed system design & protocol specs
+│   ├── CRDT_SPEC.md              # Mathematical specification of HLC & LWW
+│   ├── PG_CDC_SETUP.md           # PostgreSQL publication & replication setup
+│   └── SDK_GUIDE.md              # TypeScript SDK integration guide
 ├── go.mod
 ├── go.sum
 └── README.md
@@ -116,62 +133,82 @@ syncloom/
 
 ---
 
-## 3. Implementation Roadmap
+## 3. Implementation Roadmap & Detailed Task Breakdown
 
-### Phase 1: PostgreSQL Logical Replication Listener (`pgoutput`)
-- Implement `internal/pgcdc/replicator.go` using `github.com/jackc/pglogrepl`:
-  - Connect to PostgreSQL replication slot (`CREATE_REPLICATION_SLOT ... LOGICAL pgoutput`).
-  - Listen to streaming WAL records.
-  - Parse `RelationMessage`, `InsertMessage`, `UpdateMessage`, `DeleteMessage`.
-- Extract column-level values and map them to unified row delta payloads with primary key identification.
+### Phase 1: Core CRDT & Hybrid Logical Clock Engine (`internal/crdt`)
+- [x] Task 1.1: `internal/crdt/hlc.go`
+  - Hybrid Logical Clock implementation with physical wall clock (ms), logical counter, and client node identifier.
+  - Strict monotonic ordering ($T_1 < T_2$), tick generation, and message reception logic.
+  - Formatted serialization (`HLC(time.counter@node)`) and binary/JSON encoding.
+- [x] Task 1.2: `internal/crdt/delta.go`
+  - Delta structures: `OperationType` (INSERT, UPDATE, DELETE), `ColumnDelta`, `RowDelta`, `TransactionDelta`.
+  - Column-level metadata tracking for CRDT resolution (`_syncloom_meta`).
+- [x] Task 1.3: `internal/crdt/resolver.go`
+  - Field-level Last-Write-Wins (LWW) resolver.
+  - Automatic column merging for non-conflicting fields.
+  - Deterministic tie-breaking on simultaneous edits via monotonic HLC timestamps.
+  - Conflict audit event logging.
+- [x] Task 1.4: Unit & property-based tests in `internal/crdt/resolver_test.go`.
 
-### Phase 2: Hybrid Logical Clocks & CRDT Conflict Resolution
-- Implement `internal/crdt/hlc.go`:
-  - Generate monotonic Hybrid Logical Clock timestamps: $(\text{physical\_time}, \text{logical\_counter}, \text{client\_id})$.
-  - Guarantee that causality is strictly preserved across distributed clients regardless of system clock drift.
-- Implement `internal/crdt/resolver.go`:
-  - Column-level Last-Write-Wins (LWW):
-    If Client A updates `status` at $T_1$ and Client B updates `title` at $T_2$, both updates are merged into the row without conflict.
-    If Client A and Client B both update `status`, the higher HLC timestamp deterministically wins.
+### Phase 2: PostgreSQL CDC Replicator & Standalone Engine (`internal/pgcdc`)
+- [x] Task 2.1: `internal/pgcdc/replicator.go`
+  - Connect to PostgreSQL replication slot via `jackc/pglogrepl` (`pgoutput` plugin).
+  - Manage publication creation, replication slot negotiation, and standby status acknowledgments.
+- [x] Task 2.2: `internal/pgcdc/parser.go`
+  - Ingest and decode `RelationMessage`, `BeginMessage`, `CommitMessage`, `InsertMessage`, `UpdateMessage`, `DeleteMessage`.
+  - Extract tuple values and map to atomic `TransactionDelta` with LSN sequence tracking.
+- [x] Task 2.3: `internal/pgcdc/wal_tracker.go`
+  - Track acknowledged LSN and checkpointing.
+- [x] Task 2.4: `internal/pgcdc/standalone_cdc.go`
+  - Embedded in-memory / SQLite CDC engine for standalone demo mode and local development when PostgreSQL logical replication is not configured.
 
-### Phase 3: High-Concurrency WebSocket Hub & Delta Streaming
-- Implement `internal/hub/client.go` using `gorilla/websocket`:
-  - Maintain low-overhead client connections.
-  - Support granular channel subscriptions: `subscribe("tasks", { project_id: "xyz" })`.
-- Implement `internal/hub/broadcast.go`:
-  - When Postgres emits a change or a client uploads a mutation, calculate delta and broadcast to matching subscribers in $< 20\text{ms}$.
-  - Support JWT token authentication to enforce multi-tenant isolation.
+### Phase 3: WebSocket Hub, Routing & Delta Broadcaster (`internal/hub`)
+- [x] Task 3.1: `internal/hub/client.go`
+  - Concurrent WebSocket client management, heartbeat ping/pong, and disconnect handling.
+- [x] Task 3.2: `internal/hub/room.go`
+  - Granular table and row-level subscription routing.
+  - Filter evaluation (e.g., `project_id = '...'`).
+- [x] Task 3.3: `internal/hub/broadcast.go`
+  - Low-latency fan-out delta broadcaster (<20ms SLA).
+  - Metrics tracking: broadcast latency, throughput, active connections, conflict counts.
+- [x] Task 3.4: Inbound mutation pipeline:
+  - Receive client mutation -> Validate HLC -> Apply CRDT resolution -> Persist / Replicate -> Fan out confirmed delta.
 
-### Phase 4: TypeScript Client SDK (Web OPFS & Mobile)
-- Implement `sdk/typescript/src/sqlite_wasm.ts`:
-  - Load official SQLite Wasm with Origin Private File System (OPFS) storage for persistent local storage in browsers.
-  - Execute queries locally with 0ms latency.
-- Implement `sdk/typescript/src/queue.ts`:
-  - When mutations occur offline, persist them in a local `_syncloom_mutations` table.
-  - When network connection is re-established, flush mutations in strict FIFO order, receive confirmed server state, and reconcile local records.
+### Phase 4: Server HTTP API & CLI Runner (`internal/server`, `cmd/syncloom`)
+- [x] Task 4.1: `internal/server/api.go`
+  - REST endpoints: `/api/status`, `/api/metrics`, `/api/conflicts`, `/api/tables`, `/api/simulate`.
+  - WebSocket upgrade endpoint `/ws`.
+- [x] Task 4.2: `internal/server/static.go`
+  - Embed compiled React 19 web studio assets via `embed.FS`.
+- [x] Task 4.3: `cmd/syncloom/main.go`
+  - CLI commands: `serve` (with `--port`, `--pg-dsn`, `--slot`, `--pub`, `--demo`), `init` (Postgres DDL script generation), `bench` (synthetic high-throughput benchmark).
 
-### Phase 5: Web Studio, Verification Suite & Benchmarking
-- Build modern React 19 interface in `web/`:
-  - **Replication Lag Gauge**: Real-time display of roundtrip replication latency (Postgres WAL -> Go Server -> Client WebSocket).
-  - **Conflict Audit Table**: Detailed record of every resolved collision, showing competing timestamps and winning values.
-  - **Connected Peers Map**: Live count of connected web and mobile devices.
-- Performance benchmark: Sync 50,000 updates/sec with $< 30\text{ms}$ end-to-end propagation.
+### Phase 5: TypeScript Client SDK (`sdk/typescript`)
+- [x] Task 5.1: `sdk/typescript/src/hlc.ts`
+  - Client-side HLC implementation compatible with Go engine.
+- [x] Task 5.2: `sdk/typescript/src/sqlite_storage.ts`
+  - Persistent SQLite storage adapter for local tables, metadata (`_syncloom_meta`), and mutation queue (`_syncloom_mutations`).
+- [x] Task 5.3: `sdk/typescript/src/queue.ts`
+  - Reliable offline FIFO mutation queue with automatic retry, deduplication, and server reconciliation.
+- [x] Task 5.4: `sdk/typescript/src/sync_socket.ts`
+  - WebSocket client with exponential backoff, reconnect, and automatic resubscribe.
+- [x] Task 5.5: `sdk/typescript/src/client.ts`
+  - `SyncLoomClient` main class: 0ms local reads/writes, optimistic mutation application, background sync.
+- [x] Task 5.6: `sdk/typescript/src/hooks.ts`
+  - React 19 hooks: `useSyncLoom`, `useSyncQuery`, `useSyncMutation`, `useSyncStatus`.
+- [x] Task 5.7: SDK automated tests and build scripts (`npm run build`, `npm test`).
 
----
+### Phase 6: React 19 Web Studio (`web/`)
+- [x] Task 6.1: Scaffolding with React 19, TypeScript, TailwindCSS, Lucide icons.
+- [x] Task 6.2: Replication Lag Gauge: Visual speedometer showing real-time replication latency.
+- [x] Task 6.3: Conflict Resolution Audit Log: Detailed table of resolved concurrent collisions with timestamp comparison and winning values.
+- [x] Task 6.4: Table Sync Matrix: Synchronized tables, schemas, row counts, and live mutation stream.
+- [x] Task 6.5: Interactive 2-Peer Simulator: Split-screen visual playground to simulate offline network partitions, trigger concurrent edits, and witness CRDT LWW convergence.
+- [x] Task 6.6: Production build and embedding into Go binary.
 
-## 4. Agent Kickoff Prompt
-
-```markdown
-You are implementing **SyncLoom**, a local-first CRDT and SQLite-to-Postgres real-time sync engine in Go 1.23 + TypeScript SDK + React 19.
-
-### Execution Plan:
-1. Initialize Go module `github.com/alexandrmotologa/syncloom` in `B:\workgit\syncloom`.
-2. Implement `internal/pgcdc/` using `jackc/pglogrepl` to stream row changes from PostgreSQL logical replication (`pgoutput`).
-3. Implement `internal/crdt/` for Hybrid Logical Clocks (HLC) and field-level Last-Write-Wins (LWW) conflict resolution.
-4. Implement `internal/hub/` to manage WebSocket client connections, subscription routing, and low-latency delta broadcasting.
-5. Implement the TypeScript client SDK in `sdk/typescript/` supporting OPFS SQLite Wasm and persistent offline mutation queuing.
-6. Build the modern React 19 web studio in `web/` featuring the Replication Lag Gauge, Conflict Audit Table, and Table Sync Matrix.
-7. Implement the CLI entrypoint in `cmd/syncloom/main.go` supporting `serve --pg-dsn postgres://... --port 9330`.
-
-Maintain 100% production code without mocks, placeholders, or empty handlers.
-```
+### Phase 7: Verification, Documentation, Visual Assets & Portfolio Launch
+- [x] Task 7.1: Go unit & integration tests, SDK test suite, and benchmark execution.
+- [x] Task 7.2: Comprehensive technical documentation in `docs/` (Architecture, CRDT Spec, Postgres Setup, SDK Guide).
+- [x] Task 7.3: Generate visual assets: `docs/images/logo.png`, screenshots `syncloom-1.png` through `syncloom-4.png`, and animated demo GIF `docs/images/syncloom_demo.gif`.
+- [x] Task 7.4: Finalize humanized `README.md`.
+- [x] Task 7.5: Portfolio Sync Phase 2: Migrate assets to `mtlg-site` and `mtlglabs-space`, set status LIVE, run `sync.js`, assert parity, and push.

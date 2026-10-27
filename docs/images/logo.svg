@@ -1,0 +1,98 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <!-- Background Gradient -->
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0e1726" />
+      <stop offset="50%" stop-color="#080d1a" />
+      <stop offset="100%" stop-color="#04070d" />
+    </linearGradient>
+
+    <!-- Outer Glow -->
+    <linearGradient id="borderGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#06b6d4" stop-opacity="0.8" />
+      <stop offset="50%" stop-color="#3b82f6" stop-opacity="0.3" />
+      <stop offset="100%" stop-color="#10b981" stop-opacity="0.8" />
+    </linearGradient>
+
+    <!-- Loom Thread Gradients -->
+    <linearGradient id="threadCyan" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#22d3ee" />
+      <stop offset="100%" stop-color="#0891b2" />
+    </linearGradient>
+
+    <linearGradient id="threadEmerald" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#34d399" />
+      <stop offset="100%" stop-color="#059669" />
+    </linearGradient>
+
+    <linearGradient id="threadBlue" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#60a5fa" />
+      <stop offset="100%" stop-color="#2563eb" />
+    </linearGradient>
+
+    <!-- Center Node Glow Filter -->
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="12" result="blur" />
+      <feComposite in="SourceGraphic" in2="blur" operator="over" />
+    </filter>
+
+    <!-- Specular Highlight -->
+    <linearGradient id="specular" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.15" />
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0" />
+    </linearGradient>
+  </defs>
+
+  <!-- Squircle Base with Inner Shadow -->
+  <rect x="24" y="24" width="464" height="464" rx="108" fill="url(#bgGrad)" stroke="url(#borderGrad)" stroke-width="4" />
+  <rect x="26" y="26" width="460" height="230" rx="106" fill="url(#specular)" />
+
+  <!-- Ambient Backdrop Glow -->
+  <circle cx="256" cy="256" r="140" fill="#06b6d4" opacity="0.12" filter="url(#glow)" />
+
+  <!-- Interwoven Sync Loom Geometry -->
+  <!-- Outer Orbit Rings -->
+  <circle cx="256" cy="256" r="170" fill="none" stroke="#1e293b" stroke-width="3" stroke-dasharray="12 8" opacity="0.6" />
+  <circle cx="256" cy="256" r="125" fill="none" stroke="#334155" stroke-width="2" stroke-dasharray="6 6" opacity="0.8" />
+
+  <!-- Loom Threads (Cross-replicated warp and weft) -->
+  <g stroke-linecap="round" stroke-linejoin="round" filter="url(#glow)">
+    <!-- Vertical Thread Axis (Postgres CDC Stream) -->
+    <path d="M 256 96 L 256 416" stroke="url(#threadCyan)" stroke-width="12" />
+
+    <!-- Diagonal Clock Vectors (Hybrid Logical Clocks) -->
+    <path d="M 120 178 L 392 334" stroke="url(#threadEmerald)" stroke-width="10" opacity="0.9" />
+    <path d="M 120 334 L 392 178" stroke="url(#threadBlue)" stroke-width="10" opacity="0.9" />
+
+    <!-- Horizontal Sync Mesh -->
+    <path d="M 140 256 L 372 256" stroke="#f8fafc" stroke-width="6" opacity="0.85" />
+  </g>
+
+  <!-- Replication Node Coordinates -->
+  <!-- Top Node (PostgreSQL Server) -->
+  <circle cx="256" cy="96" r="22" fill="#0369a1" stroke="#38bdf8" stroke-width="5" />
+  <circle cx="256" cy="96" r="8" fill="#ffffff" />
+
+  <!-- Bottom Node (SQLite Replica) -->
+  <circle cx="256" cy="416" r="22" fill="#047857" stroke="#34d399" stroke-width="5" />
+  <circle cx="256" cy="416" r="8" fill="#ffffff" />
+
+  <!-- Left Node (Peer A / Web Wasm) -->
+  <circle cx="120" cy="256" r="18" fill="#1e1b4b" stroke="#818cf8" stroke-width="4" />
+  <circle cx="120" cy="256" r="6" fill="#a5b4fc" />
+
+  <!-- Right Node (Peer B / Mobile Client) -->
+  <circle cx="392" cy="256" r="18" fill="#164e63" stroke="#22d3ee" stroke-width="4" />
+  <circle cx="392" cy="256" r="6" fill="#67e8f9" />
+
+  <!-- Central CRDT Core Singularity -->
+  <circle cx="256" cy="256" r="42" fill="#0284c7" stroke="#ffffff" stroke-width="6" filter="url(#glow)" />
+  <circle cx="256" cy="256" r="26" fill="#0f172a" />
+  <circle cx="256" cy="256" r="12" fill="#22d3ee" />
+
+  <!-- Orbiting Synced Data Packets -->
+  <circle cx="188" cy="137" r="7" fill="#38bdf8" />
+  <circle cx="324" cy="375" r="7" fill="#34d399" />
+  <circle cx="340" cy="210" r="6" fill="#818cf8" />
+  <circle cx="172" cy="302" r="6" fill="#22d3ee" />
+</svg>

@@ -1,0 +1,37 @@
+{
+  "name": "@syncloom/client",
+  "version": "1.0.0",
+  "description": "Local-First CRDT & SQLite Real-Time Sync Client SDK",
+  "main": "dist/index.js",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "test": "npx tsx --test tests/sdk.test.ts"
+  },
+  "keywords": [
+    "local-first",
+    "crdt",
+    "sqlite",
+    "sync",
+    "offline-first",
+    "hlc",
+    "react19"
+  ],
+  "author": "Alexandr Motologa",
+  "license": "MIT",
+  "peerDependencies": {
+    "react": ">=18.0.0"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "@types/react": "^19.3.0",
+    "react": "^19.3.1",
+    "typescript": "^5.9.3"
+  }
+}
