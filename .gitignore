@@ -1,0 +1,40 @@
+# Binaries
+bin/
+dist/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+syncloom
+
+# Dependencies
+node_modules/
+vendor/
+
+# Test & coverage
+*.out
+coverage.txt
+.nyc_output/
+
+# Build artifacts
+web/dist/
+sdk/typescript/dist/
+
+# OS and Editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Environment & temporary data
+.env
+.env.local
+*.db
+*.db-shm
+*.db-wal
+data/
+tmp/
