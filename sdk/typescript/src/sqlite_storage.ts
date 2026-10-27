@@ -81,6 +81,10 @@ export class MemoryStorageAdapter implements StorageAdapter {
     }
   }
 
+  async migrateSchema(_table: string, _columns: Record<string, any>): Promise<void> {
+    // In-memory tables dynamically accept any columns
+  }
+
   /**
    * Directly read internal column metadata for a row.
    */
@@ -211,5 +215,15 @@ export class SQLiteStorageAdapter implements StorageAdapter {
 
   async updateMutationStatus(id: string, status: 'pending' | 'applied' | 'rejected'): Promise<void> {
     await this.driver.exec(`UPDATE _syncloom_mutations SET status = ? WHERE id = ?`, [status, id]);
+  }
+
+  async migrateSchema(table: string, columns: Record<string, any>): Promise<void> {
+    for (const col of Object.keys(columns)) {
+      try {
+        await this.driver.exec(`ALTER TABLE ${table} ADD COLUMN ${col} TEXT`);
+      } catch {
+        // Column may already exist
+      }
+    }
   }
 }

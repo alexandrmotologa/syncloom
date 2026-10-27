@@ -6,9 +6,12 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/alexandrmotologa/syncloom/internal/auth"
 	"github.com/alexandrmotologa/syncloom/internal/crdt"
 	"github.com/alexandrmotologa/syncloom/internal/hub"
 	"github.com/alexandrmotologa/syncloom/internal/pgcdc"
@@ -17,8 +20,9 @@ import (
 )
 
 var upgrader = websocket.Upgrader{
-	ReadBufferSize:  1024 * 16,
-	WriteBufferSize: 1024 * 16,
+	ReadBufferSize:    1024 * 16,
+	WriteBufferSize:   1024 * 16,
+	EnableCompression: true,
 	CheckOrigin: func(r *http.Request) bool {
 		return true // Allow all origins for dev and local-first SDK
 	},
@@ -32,16 +36,18 @@ type ServerConfig struct {
 	PubName    string
 	DemoMode   bool
 	NodeID     string
+	JWTSecret  string
 	StartTime  time.Time
 }
 
 // Server encapsulates the HTTP REST API and WebSocket daemon.
 type Server struct {
-	cfg        ServerConfig
-	hub        *hub.Hub
-	standalone *pgcdc.StandaloneCDC
-	replicator *pgcdc.Replicator
-	httpServer *http.Server
+	cfg          ServerConfig
+	hub          *hub.Hub
+	standalone   *pgcdc.StandaloneCDC
+	replicator   *pgcdc.Replicator
+	jwtValidator *auth.JWTValidator
+	httpServer   *http.Server
 }
 
 // NewServer builds an API server instance.
@@ -55,10 +61,11 @@ func NewServer(cfg ServerConfig, h *hub.Hub, standalone *pgcdc.StandaloneCDC, re
 	cfg.StartTime = time.Now()
 
 	s := &Server{
-		cfg:        cfg,
-		hub:        h,
-		standalone: standalone,
-		replicator: replicator,
+		cfg:          cfg,
+		hub:          h,
+		standalone:   standalone,
+		replicator:   replicator,
+		jwtValidator: auth.NewJWTValidator(cfg.JWTSecret),
 	}
 
 	mux := http.NewServeMux()
@@ -83,7 +90,9 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/peers", s.handlePeers)
 	mux.HandleFunc("/api/conflicts", s.handleConflicts)
 	mux.HandleFunc("/api/tables", s.handleTables)
+	mux.HandleFunc("/api/query", s.handleQuery)
 	mux.HandleFunc("/api/simulate/conflict", s.handleSimulateConflict)
+	mux.HandleFunc("/api/simulate/ddl", s.handleSimulateDDL)
 	mux.HandleFunc("/api/mutate", s.handleDirectMutate)
 
 	// Static web assets or SPA fallback
@@ -146,7 +155,15 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		clientID = "peer-" + uuid.New().String()[:8]
 	}
 
-	client := hub.NewClient(clientID, s.hub, conn, r.RemoteAddr, r.UserAgent())
+	token := r.URL.Query().Get("token")
+	claims, err := s.jwtValidator.ValidateToken(token)
+	if err != nil {
+		log.Printf("[server] rejected unverified token for %s: %v", clientID, err)
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	client := hub.NewClient(clientID, s.hub, conn, r.RemoteAddr, r.UserAgent(), claims.TenantID, claims.UserID)
 	s.hub.Register(client)
 
 	// Send initial welcome sync state
@@ -333,6 +350,318 @@ func (s *Server) handleDirectMutate(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"applied": true,
 		"delta":   delta,
+	})
+}
+
+// handleQuery executes ad-hoc SQL read queries against synchronized tables.
+func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost && r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var rawQuery string
+	if r.Method == http.MethodGet {
+		rawQuery = r.URL.Query().Get("q")
+	} else {
+		var req struct {
+			Query string `json:"query"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err == nil {
+			rawQuery = req.Query
+		}
+	}
+
+	rawQuery = strings.TrimSpace(rawQuery)
+	if rawQuery == "" {
+		rawQuery = "SELECT * FROM tasks"
+	}
+
+	start := time.Now()
+	cols, rows, err := s.executeQuery(rawQuery)
+	execDuration := time.Since(start)
+
+	res := map[string]any{
+		"query":           rawQuery,
+		"columns":         cols,
+		"rows":            rows,
+		"rowCount":        len(rows),
+		"executionTimeUs": execDuration.Microseconds(),
+		"executionTimeMs": float64(execDuration.Microseconds()) / 1000.0,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err != nil {
+		res["error"] = err.Error()
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(res)
+		return
+	}
+
+	_ = json.NewEncoder(w).Encode(res)
+}
+
+// executeQuery runs an ad-hoc read query against in-memory synchronized table state.
+func (s *Server) executeQuery(rawQuery string) ([]string, []map[string]any, error) {
+	q := strings.TrimSpace(rawQuery)
+	q = strings.TrimSuffix(q, ";")
+
+	upperQ := strings.ToUpper(q)
+	if !strings.HasPrefix(upperQ, "SELECT") {
+		return nil, nil, fmt.Errorf("only SELECT queries are supported in read-only console")
+	}
+
+	fromIdx := strings.Index(upperQ, " FROM ")
+	if fromIdx == -1 {
+		return nil, nil, fmt.Errorf("invalid SQL: missing FROM clause")
+	}
+
+	selectPart := strings.TrimSpace(q[6:fromIdx])
+	afterFrom := strings.TrimSpace(q[fromIdx+6:])
+
+	tokens := strings.Fields(afterFrom)
+	if len(tokens) == 0 {
+		return nil, nil, fmt.Errorf("invalid SQL: table name missing after FROM")
+	}
+
+	tableName := strings.ToLower(tokens[0])
+
+	var rawRows []map[string]any
+	if s.standalone != nil {
+		rawRows = s.standalone.GetTableData(tableName)
+	} else {
+		rawRows = s.hub.RowStateMap(tableName)
+	}
+
+	if len(rawRows) == 0 {
+		var exists bool
+		if s.standalone != nil {
+			stats := s.standalone.TableStats()
+			_, exists = stats[tableName]
+		} else {
+			for _, t := range s.hub.Rooms.ActiveTables() {
+				if t == tableName {
+					exists = true
+					break
+				}
+			}
+		}
+		if !exists {
+			return nil, nil, fmt.Errorf("table '%s' does not exist. Available tables: tasks, projects", tableName)
+		}
+	}
+
+	currentRows := make([]map[string]any, len(rawRows))
+	for i, r := range rawRows {
+		copyRow := make(map[string]any, len(r))
+		for k, v := range r {
+			copyRow[k] = v
+		}
+		currentRows[i] = copyRow
+	}
+
+	// Check for WHERE
+	whereIdx := strings.Index(upperQ, " WHERE ")
+	if whereIdx != -1 {
+		whereClause := q[whereIdx+7:]
+		if obIdx := strings.Index(strings.ToUpper(whereClause), " ORDER BY "); obIdx != -1 {
+			whereClause = whereClause[:obIdx]
+		}
+		if limIdx := strings.Index(strings.ToUpper(whereClause), " LIMIT "); limIdx != -1 {
+			whereClause = whereClause[:limIdx]
+		}
+
+		whereClause = strings.TrimSpace(whereClause)
+		currentRows = filterRows(currentRows, whereClause)
+	}
+
+	// Check for ORDER BY
+	obIdx := strings.Index(upperQ, " ORDER BY ")
+	if obIdx != -1 {
+		obClause := strings.TrimSpace(q[obIdx+10:])
+		if limIdx := strings.Index(strings.ToUpper(obClause), " LIMIT "); limIdx != -1 {
+			obClause = strings.TrimSpace(obClause[:limIdx])
+		}
+		parts := strings.Fields(obClause)
+		if len(parts) > 0 {
+			col := parts[0]
+			desc := len(parts) > 1 && strings.EqualFold(parts[1], "DESC")
+			sort.SliceStable(currentRows, func(i, j int) bool {
+				v1 := fmt.Sprintf("%v", currentRows[i][col])
+				v2 := fmt.Sprintf("%v", currentRows[j][col])
+				if desc {
+					return v1 > v2
+				}
+				return v1 < v2
+			})
+		}
+	}
+
+	// Check for LIMIT
+	limIdx := strings.Index(upperQ, " LIMIT ")
+	if limIdx != -1 {
+		limStr := strings.TrimSpace(q[limIdx+7:])
+		fields := strings.Fields(limStr)
+		if len(fields) > 0 {
+			if n, err := strconv.Atoi(fields[0]); err == nil && n >= 0 {
+				if len(currentRows) > n {
+					currentRows = currentRows[:n]
+				}
+			}
+		}
+	}
+
+	// Project Columns
+	var cols []string
+	if selectPart == "*" || selectPart == "" {
+		allColsMap := make(map[string]bool)
+		for _, r := range currentRows {
+			for k := range r {
+				allColsMap[k] = true
+			}
+		}
+		if len(allColsMap) == 0 {
+			if tableName == "tasks" {
+				cols = []string{"id", "title", "status", "priority", "assignee", "tenant_id", "_hlc"}
+			} else if tableName == "projects" {
+				cols = []string{"id", "name", "status", "owner", "tenant_id", "_hlc"}
+			} else {
+				cols = []string{"id", "_hlc"}
+			}
+		} else {
+			var sorted []string
+			hasID := false
+			hasTenant := false
+			hasHLC := false
+			for k := range allColsMap {
+				if k == "id" {
+					hasID = true
+				} else if k == "tenant_id" {
+					hasTenant = true
+				} else if k == "_hlc" {
+					hasHLC = true
+				} else {
+					sorted = append(sorted, k)
+				}
+			}
+			sort.Strings(sorted)
+			if hasID {
+				cols = append(cols, "id")
+			}
+			if hasTenant {
+				cols = append(cols, "tenant_id")
+			}
+			cols = append(cols, sorted...)
+			if hasHLC {
+				cols = append(cols, "_hlc")
+			}
+		}
+	} else {
+		rawCols := strings.Split(selectPart, ",")
+		for _, c := range rawCols {
+			cleaned := strings.TrimSpace(c)
+			if cleaned != "" {
+				cols = append(cols, cleaned)
+			}
+		}
+		projected := make([]map[string]any, len(currentRows))
+		for i, r := range currentRows {
+			newRow := make(map[string]any, len(cols))
+			for _, col := range cols {
+				newRow[col] = r[col]
+			}
+			projected[i] = newRow
+		}
+		currentRows = projected
+	}
+
+	return cols, currentRows, nil
+}
+
+func filterRows(rows []map[string]any, condition string) []map[string]any {
+	var op string
+	var parts []string
+	if strings.Contains(condition, "!=") {
+		op = "!="
+		parts = strings.SplitN(condition, "!=", 2)
+	} else if strings.Contains(condition, "=") {
+		op = "="
+		parts = strings.SplitN(condition, "=", 2)
+	}
+
+	if len(parts) != 2 {
+		return rows
+	}
+
+	col := strings.TrimSpace(parts[0])
+	val := strings.Trim(strings.TrimSpace(parts[1]), `"'`)
+
+	var filtered []map[string]any
+	for _, r := range rows {
+		rowVal := fmt.Sprintf("%v", r[col])
+		match := false
+		if op == "=" && strings.EqualFold(rowVal, val) {
+			match = true
+		} else if op == "!=" && !strings.EqualFold(rowVal, val) {
+			match = true
+		}
+		if match {
+			filtered = append(filtered, r)
+		}
+	}
+	return filtered
+}
+
+// handleSimulateDDL simulates a PostgreSQL DDL schema alteration (e.g. ALTER TABLE tasks ADD COLUMN priority TEXT)
+func (s *Server) handleSimulateDDL(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Table        string `json:"table"`
+		Column       string `json:"column"`
+		DefaultValue any    `json:"defaultValue"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Column == "" {
+		req.Table = "tasks"
+		req.Column = "estimated_hours"
+		req.DefaultValue = "4h"
+	}
+	if req.Table == "" {
+		req.Table = "tasks"
+	}
+	if req.DefaultValue == nil {
+		req.DefaultValue = "4h"
+	}
+
+	var delta crdt.RowDelta
+	if s.standalone != nil {
+		delta = s.standalone.AddColumn(req.Table, req.Column, req.DefaultValue)
+	} else {
+		hlc := s.hub.Clock.Now()
+		delta = crdt.RowDelta{
+			ID:         uuid.New().String(),
+			Table:      req.Table,
+			PrimaryKey: "*",
+			Operation:  crdt.OpSchemaMigration,
+			Columns:    map[string]any{req.Column: req.DefaultValue},
+			ColMeta:    map[string]crdt.Timestamp{req.Column: hlc},
+			Timestamp:  hlc,
+			NodeID:     s.cfg.NodeID,
+			CreatedAt:  time.Now().UnixMilli(),
+		}
+		s.hub.Broadcast(delta)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"status":      "schema_migrated",
+		"table":       req.Table,
+		"columnAdded": req.Column,
+		"delta":       delta,
 	})
 }
 

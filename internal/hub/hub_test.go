@@ -17,12 +17,16 @@ func TestRoomSubscriptionAndDispatch(t *testing.T) {
 
 	clientA := &Client{
 		ID:            "client-a",
+		TenantID:      "default",
+		UserID:        "user-a",
 		Hub:           hub,
 		Send:          make(chan []byte, 10),
 		Subscriptions: make(map[string]bool),
 	}
 	clientB := &Client{
 		ID:            "client-b",
+		TenantID:      "default",
+		UserID:        "user-b",
 		Hub:           hub,
 		Send:          make(chan []byte, 10),
 		Subscriptions: make(map[string]bool),
@@ -86,12 +90,16 @@ func TestClientMutationAndFanOut(t *testing.T) {
 
 	client1 := &Client{
 		ID:            "peer-1",
+		TenantID:      "default",
+		UserID:        "user-1",
 		Hub:           hub,
 		Send:          make(chan []byte, 10),
 		Subscriptions: make(map[string]bool),
 	}
 	client2 := &Client{
 		ID:            "peer-2",
+		TenantID:      "default",
+		UserID:        "user-2",
 		Hub:           hub,
 		Send:          make(chan []byte, 10),
 		Subscriptions: make(map[string]bool),
@@ -140,5 +148,72 @@ func TestClientMutationAndFanOut(t *testing.T) {
 		}
 	case <-time.After(500 * time.Millisecond):
 		t.Fatalf("timed out waiting for fan-out delta on client 2")
+	}
+}
+
+func TestTenantIsolationAndRLS(t *testing.T) {
+	hub := NewHub("server-hub", 100)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go hub.Run(ctx)
+
+	clientAcme := &Client{
+		ID:            "peer-acme",
+		TenantID:      "tenant-acme",
+		UserID:        "alice",
+		Hub:           hub,
+		Send:          make(chan []byte, 10),
+		Subscriptions: make(map[string]bool),
+	}
+	clientGlobex := &Client{
+		ID:            "peer-globex",
+		TenantID:      "tenant-globex",
+		UserID:        "bob",
+		Hub:           hub,
+		Send:          make(chan []byte, 10),
+		Subscriptions: make(map[string]bool),
+	}
+
+	hub.Register(clientAcme)
+	hub.Register(clientGlobex)
+
+	hub.Rooms.Subscribe("documents", clientAcme)
+	hub.Rooms.Subscribe("documents", clientGlobex)
+
+	// Broadcast document belonging to tenant-acme
+	acmeDoc := crdt.RowDelta{
+		Table:      "documents",
+		PrimaryKey: "doc-1",
+		Operation:  crdt.OpInsert,
+		Columns: map[string]any{
+			"tenant_id": "tenant-acme",
+			"title":     "Confidential Acme Strategy",
+		},
+		Timestamp: hub.Clock.Now(),
+		NodeID:    "server-hub",
+	}
+
+	hub.Broadcast(acmeDoc)
+
+	// Acme client must receive it
+	select {
+	case msg := <-clientAcme.Send:
+		var out OutboundMessage
+		if err := json.Unmarshal(msg, &out); err != nil {
+			t.Fatalf("failed to parse message: %v", err)
+		}
+		if out.Delta.Columns["title"] != "Confidential Acme Strategy" {
+			t.Fatalf("unexpected delta content")
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatalf("timed out waiting for acme client delta")
+	}
+
+	// Globex client must NOT receive Acme's confidential document
+	select {
+	case msg := <-clientGlobex.Send:
+		t.Fatalf("security violation: cross-tenant data leaked to globex: %s", string(msg))
+	case <-time.After(50 * time.Millisecond):
+		// Success: no data leaked
 	}
 }

@@ -1,6 +1,79 @@
 import { useState, useEffect, useCallback, useTransition } from 'react';
 import { SyncLoomClient } from './client.js';
 import { SyncStatus } from './types.js';
+import { PeerPresence } from './presence.js';
+
+/**
+ * React 19 hook providing collaborative presence, cursor awareness, and typing status.
+ */
+export function useSyncPresence(
+  client: SyncLoomClient,
+  table: string,
+  rowId?: string
+): {
+  peers: PeerPresence[];
+  rowPeers: PeerPresence[];
+  updatePresence: (opts: { field?: string; typing?: boolean; user?: string }) => void;
+} {
+  const [peers, setPeers] = useState<PeerPresence[]>([]);
+
+  useEffect(() => {
+    const unsubscribe = client.subscribePresence(table, (_tbl, updatedPeers) => {
+      // Filter out self
+      const others = updatedPeers.filter((p) => p.clientId !== client.clock.nodeId);
+      setPeers(others);
+    });
+
+    return unsubscribe;
+  }, [client, table]);
+
+  const updatePresence = useCallback(
+    (opts: { field?: string; typing?: boolean; user?: string }) => {
+      client.updatePresence(table, {
+        primaryKey: rowId,
+        field: opts.field,
+        typing: opts.typing,
+        user: opts.user,
+      });
+    },
+    [client, table, rowId]
+  );
+
+  const rowPeers = rowId ? peers.filter((p) => p.primaryKey === rowId) : peers;
+
+  return { peers, rowPeers, updatePresence };
+}
+
+/**
+ * React 19 hook providing time-travel undo and redo capabilities.
+ */
+export function useSyncUndo(client: SyncLoomClient): {
+  undo: () => Promise<boolean>;
+  redo: () => Promise<boolean>;
+  canUndo: boolean;
+  canRedo: boolean;
+} {
+  const [canUndo, setCanUndo] = useState(client.canUndo());
+  const [canRedo, setCanRedo] = useState(client.canRedo());
+
+  useEffect(() => {
+    const unsubscribe = client.undoManager.onChange(() => {
+      setCanUndo(client.canUndo());
+      setCanRedo(client.canRedo());
+    });
+    return unsubscribe;
+  }, [client]);
+
+  const undo = useCallback(async () => {
+    return await client.undo();
+  }, [client]);
+
+  const redo = useCallback(async () => {
+    return await client.redo();
+  }, [client]);
+
+  return { undo, redo, canUndo, canRedo };
+}
 
 /**
  * React 19 hook that queries local-first records with 0ms initial render

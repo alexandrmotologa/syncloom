@@ -67,11 +67,46 @@ func (p *Parser) Ingest(payload []byte, lsn pglogrepl.LSN) (*ParseResult, error)
 				IsPK:     c.Flags == 1, // Replica identity / PK flag
 			}
 		}
+
+		var schemaDelta *crdt.RowDelta
+		if existing, ok := p.relations[m.RelationID]; ok {
+			// Detect added columns
+			oldMap := make(map[string]bool)
+			for _, oc := range existing.Columns {
+				oldMap[oc.Name] = true
+			}
+			newCols := make(map[string]any)
+			for _, nc := range cols {
+				if !oldMap[nc.Name] {
+					newCols[nc.Name] = "TEXT"
+				}
+			}
+			if len(newCols) > 0 {
+				hlc := p.clock.Now()
+				delta := crdt.RowDelta{
+					ID:         uuid.New().String(),
+					Table:      m.RelationName,
+					PrimaryKey: "*schema*",
+					Operation:  crdt.OpSchemaMigration,
+					Columns:    newCols,
+					ColMeta:    make(map[string]crdt.Timestamp),
+					Timestamp:  hlc,
+					NodeID:     p.clock.NodeID(),
+					LSN:        uint64(lsn),
+					CreatedAt:  time.Now().UnixMilli(),
+				}
+				schemaDelta = &delta
+			}
+		}
+
 		p.relations[m.RelationID] = &RelationSchema{
 			ID:        m.RelationID,
 			Namespace: m.Namespace,
 			Name:      m.RelationName,
 			Columns:   cols,
+		}
+		if schemaDelta != nil {
+			return &ParseResult{RowDelta: schemaDelta}, nil
 		}
 		return nil, nil
 

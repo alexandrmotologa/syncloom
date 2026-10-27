@@ -19,6 +19,9 @@ export interface HubMetrics {
   averageLagMs: number;
   conflictsResolved: number;
   deltasPerSec: number;
+  compressionRatio?: number;
+  bandwidthSavedKb?: number;
+  compressionCodec?: string;
 }
 
 export interface PeerInfo {

@@ -1,15 +1,18 @@
 import { RowDelta } from './types.js';
+import { PeerPresence } from './presence.js';
 
 export type MessageHandler = (msg: ServerMessage) => void;
 
 export interface ServerMessage {
-  type: 'delta' | 'ack' | 'pong' | 'error' | 'sync_state';
+  type: 'delta' | 'ack' | 'presence' | 'pong' | 'error' | 'sync_state';
   delta?: RowDelta;
   mutationId?: string;
   hlc?: string;
   applied?: boolean;
   error?: string;
   serverTime?: number;
+  table?: string;
+  peers?: PeerPresence[];
 }
 
 export class SyncSocket {
@@ -117,6 +120,14 @@ export class SyncSocket {
       type: 'mutate',
       mutationId,
       delta,
+    });
+  }
+
+  public sendPresence(table: string, presence: PeerPresence): void {
+    this.send({
+      type: 'presence',
+      table,
+      presence,
     });
   }
 

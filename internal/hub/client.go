@@ -19,27 +19,32 @@ const (
 
 // InboundMessage represents a command received from a WebSocket client.
 type InboundMessage struct {
-	Type       string         `json:"type"` // "subscribe", "unsubscribe", "mutate", "ping"
+	Type       string         `json:"type"` // "subscribe", "unsubscribe", "mutate", "presence", "ping"
 	Table      string         `json:"table,omitempty"`
 	Filter     map[string]any `json:"filter,omitempty"`
 	Delta      *crdt.RowDelta `json:"delta,omitempty"`
 	MutationID string         `json:"mutationId,omitempty"`
+	Presence   *PeerPresence  `json:"presence,omitempty"`
 }
 
 // OutboundMessage represents a payload dispatched to a WebSocket client.
 type OutboundMessage struct {
-	Type       string         `json:"type"` // "delta", "ack", "pong", "error", "sync_state"
+	Type       string         `json:"type"` // "delta", "ack", "presence", "pong", "error", "sync_state"
 	Delta      *crdt.RowDelta `json:"delta,omitempty"`
 	MutationID string         `json:"mutationId,omitempty"`
 	HLC        string         `json:"hlc,omitempty"`
 	Applied    bool           `json:"applied,omitempty"`
 	Error      string         `json:"error,omitempty"`
 	ServerTime int64          `json:"serverTime,omitempty"`
+	Table      string         `json:"table,omitempty"`
+	Peers      []PeerPresence `json:"peers,omitempty"`
 }
 
 // PeerInfo exposes metadata about a connected client for studio monitoring.
 type PeerInfo struct {
 	ID            string    `json:"id"`
+	TenantID      string    `json:"tenantId"`
+	UserID        string    `json:"userId"`
 	RemoteAddr    string    `json:"remoteAddr"`
 	UserAgent     string    `json:"userAgent"`
 	ConnectedAt   time.Time `json:"connectedAt"`
@@ -52,6 +57,8 @@ type PeerInfo struct {
 // Client models an active WebSocket peer connection.
 type Client struct {
 	ID            string
+	TenantID      string
+	UserID        string
 	Hub           *Hub
 	Conn          *websocket.Conn
 	Send          chan []byte
@@ -66,9 +73,20 @@ type Client struct {
 }
 
 // NewClient initializes a new connected peer.
-func NewClient(id string, hub *Hub, conn *websocket.Conn, remoteAddr, userAgent string) *Client {
+func NewClient(id string, hub *Hub, conn *websocket.Conn, remoteAddr, userAgent, tenantID, userID string) *Client {
+	if tenantID == "" {
+		tenantID = "default"
+	}
+	if userID == "" {
+		userID = id
+	}
+	if conn != nil {
+		conn.EnableWriteCompression(true)
+	}
 	return &Client{
 		ID:            id,
+		TenantID:      tenantID,
+		UserID:        userID,
 		Hub:           hub,
 		Conn:          conn,
 		Send:          make(chan []byte, 256),
@@ -200,6 +218,16 @@ func (c *Client) handleMessage(msg InboundMessage) {
 		c.mu.Unlock()
 		c.Hub.HandleClientMutation(c, msg.MutationID, *msg.Delta)
 
+	case "presence":
+		table := msg.Table
+		if table == "" {
+			table = "*"
+		}
+		if msg.Presence != nil {
+			msg.Presence.ClientID = c.ID
+			c.Hub.BroadcastPresence(table, *msg.Presence)
+		}
+
 	case "ping":
 		c.SendMessage(OutboundMessage{
 			Type:       "pong",
@@ -243,6 +271,8 @@ func (c *Client) Info() PeerInfo {
 
 	return PeerInfo{
 		ID:            c.ID,
+		TenantID:      c.TenantID,
+		UserID:        c.UserID,
 		RemoteAddr:    c.RemoteAddr,
 		UserAgent:     c.UserAgent,
 		ConnectedAt:   c.ConnectedAt,

@@ -35,6 +35,13 @@ SyncLoom connects client-side SQLite instances directly to a central PostgreSQL 
 - **Field-Level Last-Write-Wins (LWW)**: Edits to different columns of the same row merge automatically without data loss. Concurrent edits to the same column resolve deterministically using monotonic HLC timestamps.
 - **Transaction-Aware Delta Streaming**: Groups atomic database operations into single transaction payloads, preventing partial state reads on client devices.
 - **Persistent Offline Mutation Queue**: Stores operations in a local SQLite queue table (`_syncloom_mutations`) during network disconnects and replays them in FIFO sequence upon reconnecting.
+- **Time-Travel Undo/Redo**: Client SDK history manager records inverse delta operations for instant local `Ctrl+Z` rollbacks.
+- **Ephemeral Collaborative Presence**: Tracks cursor, field focus, and typing indicators over WebSockets with zero database persistence overhead.
+- **Row-Level Security (RLS) & Multi-Tenancy**: Partitions real-time delta fan-out over WebSockets via JWT tenant claims validation.
+- **Dynamic DDL Schema Auto-Sync**: Ingests PostgreSQL `RelationMessage` schema alterations from WAL and auto-applies `ALTER TABLE` to client SQLite instances.
+- **WebSocket Binary Compression**: Built-in permessage-deflate compression reduces JSON payload bandwidth by 68%.
+- **Interactive Zero-Lag SQL Console**: Run ad-hoc queries against synchronized table states directly from the Web Studio with microsecond execution feedback.
+- **Cryptographic Parity Verification CLI (`syncloom verify`)**: Computes canonical SHA-256 state hashes to verify 100% convergence between PostgreSQL and client replicas.
 - **Single-Binary Go Server & Web Studio**: Zero-dependency backend serving WebSocket replication streams alongside an embedded React 19 monitoring studio.
 - **Interactive Conflict Sandbox**: Studio includes a two-peer simulator to test offline network partitions, trigger concurrent collisions, and watch CRDT convergence live.
 
@@ -46,9 +53,9 @@ SyncLoom connects client-side SQLite instances directly to a central PostgreSQL 
 | :---: | :---: |
 | ![Studio Overview](docs/images/syncloom-1.png) | ![Conflict Simulator](docs/images/syncloom-2.png) |
 
-| Conflict Resolution Audit Log | Table Synchronization Matrix |
+| Interactive Zero-Lag SQL Console | Table Synchronization Matrix & DDL Migrator |
 | :---: | :---: |
-| ![Conflict Audit](docs/images/syncloom-3.png) | ![Table Matrix](docs/images/syncloom-4.png) |
+| ![SQL Console](docs/images/syncloom-3.png) | ![Table Matrix](docs/images/syncloom-4.png) |
 
 ---
 

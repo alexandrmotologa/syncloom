@@ -9,9 +9,10 @@ import (
 type Operation string
 
 const (
-	OpInsert Operation = "INSERT"
-	OpUpdate Operation = "UPDATE"
-	OpDelete Operation = "DELETE"
+	OpInsert          Operation = "INSERT"
+	OpUpdate          Operation = "UPDATE"
+	OpDelete          Operation = "DELETE"
+	OpSchemaMigration Operation = "SCHEMA_MIGRATION"
 )
 
 // RowDelta represents a single synchronized row change across the cluster.

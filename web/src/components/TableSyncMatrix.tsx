@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { TablesData } from '../hooks/useSyncStats';
-import { Table, Database, ArrowUpDown, RefreshCw, Eye } from 'lucide-react';
+import { Table, Database, RefreshCw, GitBranch, CheckCircle2 } from 'lucide-react';
 
 interface TableSyncMatrixProps {
   tablesData: TablesData;
@@ -10,14 +10,42 @@ interface TableSyncMatrixProps {
 export const TableSyncMatrix: React.FC<TableSyncMatrixProps> = ({ tablesData, onRefresh }) => {
   const tableNames = Object.keys(tablesData.stats || {});
   const [selectedTable, setSelectedTable] = useState<string>(tableNames[0] || 'tasks');
+  const [ddlLoading, setDdlLoading] = useState(false);
+  const [ddlStatus, setDdlStatus] = useState<string | null>(null);
 
   const rows = tablesData.tables[selectedTable] || [];
 
+  const handleSimulateDDL = async () => {
+    setDdlLoading(true);
+    setDdlStatus(null);
+    try {
+      const colName = selectedTable === 'tasks' ? 'estimated_hours' : 'budget_usd';
+      const res = await fetch('/api/simulate/ddl', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          table: selectedTable,
+          column: colName,
+          defaultValue: selectedTable === 'tasks' ? '4h' : '$5,000',
+        }),
+      });
+      if (res.ok) {
+        setDdlStatus(`Added column '${colName}' via WAL DDL; client SQLite auto-migrated.`);
+        onRefresh();
+      }
+    } catch {
+      // Ignored
+    } finally {
+      setDdlLoading(false);
+      setTimeout(() => setDdlStatus(null), 5000);
+    }
+  };
+
   return (
     <div className="bg-slate-900/60 border border-slate-800 rounded-2xl overflow-hidden backdrop-blur">
-      <div className="p-6 border-b border-slate-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+      <div className="p-5 sm:p-6 border-b border-slate-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div className="flex items-center gap-3">
-          <div className="p-2.5 rounded-xl bg-cyan-950/60 text-cyan-400 border border-cyan-800/60">
+          <div className="p-2.5 rounded-xl bg-cyan-950/60 text-cyan-400 border border-cyan-800/60 flex-shrink-0">
             <Database className="w-5 h-5" />
           </div>
           <div>
@@ -28,14 +56,32 @@ export const TableSyncMatrix: React.FC<TableSyncMatrixProps> = ({ tablesData, on
           </div>
         </div>
 
-        <button
-          onClick={onRefresh}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium border border-slate-700/60 transition-colors"
-        >
-          <RefreshCw className="w-3.5 h-3.5 text-cyan-400" />
-          <span>Refresh Data</span>
-        </button>
+        <div className="flex items-center gap-2 flex-wrap">
+          <button
+            onClick={handleSimulateDDL}
+            disabled={ddlLoading}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-indigo-950/80 hover:bg-indigo-900 text-indigo-300 text-xs font-medium border border-indigo-700/60 transition-colors whitespace-nowrap flex-shrink-0 disabled:opacity-50"
+          >
+            <GitBranch className="w-3.5 h-3.5 text-indigo-400" />
+            <span>{ddlLoading ? 'Migrating...' : 'Simulate DDL Migration'}</span>
+          </button>
+
+          <button
+            onClick={onRefresh}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium border border-slate-700/60 transition-colors whitespace-nowrap flex-shrink-0"
+          >
+            <RefreshCw className="w-3.5 h-3.5 text-cyan-400" />
+            <span>Refresh Data</span>
+          </button>
+        </div>
       </div>
+
+      {ddlStatus && (
+        <div className="px-6 py-2.5 bg-emerald-950/60 border-b border-emerald-800/60 flex items-center gap-2 text-xs font-mono text-emerald-300">
+          <CheckCircle2 className="w-4 h-4 text-emerald-400 flex-shrink-0" />
+          <span>{ddlStatus}</span>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 md:grid-cols-4 divide-y md:divide-y-0 md:divide-x divide-slate-800">
         {/* Table Selector Sidebar */}

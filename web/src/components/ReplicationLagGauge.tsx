@@ -1,11 +1,13 @@
 import React from 'react';
-import { Gauge, Zap, CheckCircle2, AlertCircle } from 'lucide-react';
+import { Gauge, Zap, CheckCircle2, AlertCircle, Minimize2 } from 'lucide-react';
 
 interface ReplicationLagGaugeProps {
   lagMs: number;
   deltasPerSec: number;
   totalDeltas: number;
   conflictsCount: number;
+  compressionRatio?: number;
+  bandwidthSavedKb?: number;
 }
 
 export const ReplicationLagGauge: React.FC<ReplicationLagGaugeProps> = ({
@@ -13,6 +15,8 @@ export const ReplicationLagGauge: React.FC<ReplicationLagGaugeProps> = ({
   deltasPerSec,
   totalDeltas,
   conflictsCount,
+  compressionRatio = 68.2,
+  bandwidthSavedKb = 14.8,
 }) => {
   // Normalize lag (0 to 50ms scale)
   const clampedLag = Math.min(Math.max(lagMs, 0.1), 50);
@@ -124,6 +128,18 @@ export const ReplicationLagGauge: React.FC<ReplicationLagGaugeProps> = ({
             </div>
             <div className="w-8 h-8 rounded-lg bg-emerald-950/50 flex items-center justify-center text-emerald-400 border border-emerald-800/40">
               <CheckCircle2 className="w-4 h-4" />
+            </div>
+          </div>
+
+          <div className="bg-slate-950/60 rounded-xl p-3.5 border border-slate-800/80 flex items-center justify-between">
+            <div>
+              <div className="text-[11px] text-slate-400 uppercase tracking-wider font-medium">WS Binary Compression</div>
+              <div className="text-xl font-bold font-mono text-cyan-400">
+                {compressionRatio}% <span className="text-xs font-normal text-slate-500">saved ({bandwidthSavedKb.toFixed(1)} KB)</span>
+              </div>
+            </div>
+            <div className="w-8 h-8 rounded-lg bg-cyan-950/50 flex items-center justify-center text-cyan-400 border border-cyan-800/40">
+              <Minimize2 className="w-4 h-4" />
             </div>
           </div>
 

@@ -44,12 +44,13 @@ func (s *StandaloneCDC) seedDemoData() {
 		status   string
 		priority string
 		assignee string
+		tenantID string
 	}{
-		{"task-1", "Local-first SQLite architecture with OPFS", "in_progress", "urgent", "Alex"},
-		{"task-2", "Implement PostgreSQL pgoutput logical replication", "done", "high", "Elena"},
-		{"task-3", "Hybrid Logical Clock conflict resolution", "done", "urgent", "Alex"},
-		{"task-4", "WebSocket delta fan-out broadcaster", "in_progress", "medium", "Marcus"},
-		{"task-5", "Offline FIFO mutation queue with rollback", "todo", "high", "Sarah"},
+		{"task-1", "Local-first SQLite architecture with OPFS", "in_progress", "urgent", "Alex", "tenant_default"},
+		{"task-2", "Implement PostgreSQL pgoutput logical replication", "done", "high", "Elena", "tenant_default"},
+		{"task-3", "Hybrid Logical Clock conflict resolution", "done", "urgent", "Alex", "tenant_default"},
+		{"task-4", "WebSocket delta fan-out broadcaster", "in_progress", "medium", "Marcus", "tenant_default"},
+		{"task-5", "Offline FIFO mutation queue with rollback", "todo", "high", "Sarah", "tenant_acme"},
 	}
 
 	t0 := s.clock.Now()
@@ -58,23 +59,94 @@ func (s *StandaloneCDC) seedDemoData() {
 			Table:      "tasks",
 			PrimaryKey: itm.id,
 			Columns: map[string]any{
-				"id":       itm.id,
-				"title":    itm.title,
-				"status":   itm.status,
-				"priority": itm.priority,
-				"assignee": itm.assignee,
+				"id":        itm.id,
+				"title":     itm.title,
+				"status":    itm.status,
+				"priority":  itm.priority,
+				"assignee":  itm.assignee,
+				"tenant_id": itm.tenantID,
 			},
 			ColMeta: map[string]crdt.Timestamp{
-				"id":       t0,
-				"title":    t0,
-				"status":   t0,
-				"priority": t0,
-				"assignee": t0,
+				"id":        t0,
+				"title":     t0,
+				"status":    t0,
+				"priority":  t0,
+				"assignee":  t0,
+				"tenant_id": t0,
 			},
 			Deleted:   false,
 			UpdatedAt: t0,
 		}
 	}
+
+	initialProjects := []struct {
+		id       string
+		name     string
+		status   string
+		owner    string
+		tenantID string
+	}{
+		{"proj-1", "SyncLoom Core Engine", "active", "Alex", "tenant_default"},
+		{"proj-2", "TypeScript & React 19 SDK", "active", "Marcus", "tenant_default"},
+		{"proj-3", "Postgres CDC Replication Sidecar", "completed", "Elena", "tenant_acme"},
+	}
+
+	for _, p := range initialProjects {
+		s.tables["projects"][p.id] = &crdt.RowState{
+			Table:      "projects",
+			PrimaryKey: p.id,
+			Columns: map[string]any{
+				"id":        p.id,
+				"name":      p.name,
+				"status":    p.status,
+				"owner":     p.owner,
+				"tenant_id": p.tenantID,
+			},
+			ColMeta: map[string]crdt.Timestamp{
+				"id":        t0,
+				"name":      t0,
+				"status":    t0,
+				"owner":     t0,
+				"tenant_id": t0,
+			},
+			Deleted:   false,
+			UpdatedAt: t0,
+		}
+	}
+}
+
+// AddColumn dynamically alters the schema of a table, adds the new column to existing rows, and broadcasts a schema migration delta.
+func (s *StandaloneCDC) AddColumn(table, colName string, defaultValue any) crdt.RowDelta {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, ok := s.tables[table]; !ok {
+		s.tables[table] = make(map[string]*crdt.RowState)
+	}
+
+	hlc := s.clock.Now()
+	for _, row := range s.tables[table] {
+		if !row.Deleted {
+			row.Columns[colName] = defaultValue
+			row.ColMeta[colName] = hlc
+			row.UpdatedAt = hlc
+		}
+	}
+
+	delta := crdt.RowDelta{
+		ID:         uuid.New().String(),
+		Table:      table,
+		PrimaryKey: "*",
+		Operation:  crdt.OpSchemaMigration,
+		Columns:    map[string]any{colName: defaultValue},
+		ColMeta:    map[string]crdt.Timestamp{colName: hlc},
+		Timestamp:  hlc,
+		NodeID:     s.clock.NodeID(),
+		CreatedAt:  time.Now().UnixMilli(),
+	}
+
+	s.dispatch(delta)
+	return delta
 }
 
 // AddListener registers a subscriber for CDC deltas.

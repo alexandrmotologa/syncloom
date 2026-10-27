@@ -89,5 +89,77 @@ test('SyncLoomClient - Local 0ms Writes and Field-Level CRDT Merge', async () =>
   assert.strictEqual(merged?.assignee, 'Alex', 'local assignee must be preserved');
   assert.strictEqual(merged?.status, 'in_progress', 'status must be merged from remote');
 
+  // 6. Test Time-Travel Undo and Redo
+  await client.update('tasks', 'task-100', { title: 'Changed by User' });
+  const afterUpdate = await client.get('tasks', 'task-100');
+  assert.strictEqual(afterUpdate?.title, 'Changed by User');
+  assert.strictEqual(client.canUndo(), true);
+
+  // Undo returns to previous title
+  await client.undo();
+  const afterUndo = await client.get('tasks', 'task-100');
+  assert.strictEqual(afterUndo?.title, 'Local First Task');
+
+  // Redo re-applies changed title
+  assert.strictEqual(client.canRedo(), true);
+  await client.redo();
+  const afterRedo = await client.get('tasks', 'task-100');
+  assert.strictEqual(afterRedo?.title, 'Changed by User');
+
+  client.close();
+});
+
+test('SQLiteStorageAdapter - Schema Migration & Persistence Driver', async () => {
+  const executedStatements: string[] = [];
+  const mockRows: any[] = [];
+
+  const mockDriver = {
+    async exec(sql: string, params?: any[]) {
+      executedStatements.push(sql.trim());
+      if (sql.includes('SELECT')) {
+        return mockRows;
+      }
+      return [];
+    },
+  };
+
+  const { SQLiteStorageAdapter } = await import('../src/sqlite_storage.js');
+  const sqliteAdapter = new SQLiteStorageAdapter(mockDriver);
+
+  // Initialize internal tables
+  await sqliteAdapter.init();
+  assert(executedStatements.some((s) => s.includes('_syncloom_meta')));
+  assert(executedStatements.some((s) => s.includes('_syncloom_mutations')));
+
+  // Test dynamic DDL schema migration
+  await sqliteAdapter.migrateSchema('tasks', {
+    priority: 'high',
+    due_date: '2026-12-31',
+  });
+
+  assert(executedStatements.some((s) => s.includes('ALTER TABLE tasks ADD COLUMN priority TEXT')));
+  assert(executedStatements.some((s) => s.includes('ALTER TABLE tasks ADD COLUMN due_date TEXT')));
+});
+
+test('SyncLoomClient - Presence Emission and Subscription', async () => {
+  const storage = new MemoryStorageAdapter();
+  const client = new SyncLoomClient({
+    url: 'ws://localhost:9330/ws',
+    nodeId: 'client-presence-test',
+    storage,
+    autoSync: false,
+  });
+
+  let presenceReceived: any = null;
+  const unsubscribe = client.subscribePresence('tasks', (peers) => {
+    presenceReceived = peers;
+  });
+
+  assert.strictEqual(typeof unsubscribe, 'function');
+  // Send typing presence
+  client.sendPresence('tasks', 'task-1', 'title', true);
+
+  // Presence channel registered
+  unsubscribe();
   client.close();
 });

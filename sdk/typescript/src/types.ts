@@ -1,4 +1,4 @@
-export type Operation = 'INSERT' | 'UPDATE' | 'DELETE';
+export type Operation = 'INSERT' | 'UPDATE' | 'DELETE' | 'SCHEMA_MIGRATION';
 
 export interface RowDelta {
   id: string;
@@ -63,4 +63,5 @@ export interface StorageAdapter {
   addMutation(mutation: Mutation): Promise<void>;
   removeMutation(id: string): Promise<void>;
   updateMutationStatus(id: string, status: 'pending' | 'applied' | 'rejected'): Promise<void>;
+  migrateSchema?(table: string, columns: Record<string, any>): Promise<void>;
 }
